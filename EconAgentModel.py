@@ -2,6 +2,8 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+
+
 NUMCOUNTRIES = 20
 AVGPOP = 100
 AVGPRODCOST = 3

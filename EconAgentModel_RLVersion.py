@@ -25,15 +25,44 @@ class Country():
     def tariffs(self):
         return sum([i[0] for i in list(self.tariffs.values())])
 
-    def __evaluateTariff(self,other_country, tariff):
-        total_tariffs = self.tariffs() - self.tariffs[other_country][0] + tariff
-        price = (self.production_cost * self.population + total_tariffs) / (len(self.tariffs) + self.demand_slope)
-        demand = self.population - self.demand_slope * price
+    def _evaluatePolicy(self, countries):
+        p = len(countries)
+        y = np.array([countries[int(country / p)].demand_slope * countries[int(country / p)]\
+        .tariffs[countries[country%p]][0] + countries[int(country / p)].population for country in range(p**2)])
+        X = np.zeros((p**2, p**2))
+        for producer in range(p):
+            for market in range(p):
+                for i in range(p):
+                    for j in range(p):
+                        if i == producer:
+                            if j == market:
+                                X[Country.index(producer, market, p), Country.index(i,j,p)] = 2 - 2 * \
+                                countries[producer].production_cost * countries[market].demand_slope
+                            else:
+                                X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * countries[producer]\
+                                .production_cost * countries[market].demand_slope
+                        elif j == market:
+                            try:
+                                X[Country.index(producer, market, p), Country.index(i,j,p)] = 2
+                            except IndexError:
+                                print (X.shape, Country.index(producer, market, p), Country.index(i,j,p))
+        productions = np.maximum(np.linalg.solve(X,y), 0)
+        consumptions = [sum(productions.reshape((p,p))[:,countries.index(i)]) for i in range(p)]
+        prices = [(countries[i].population - consumptions[i]) / countries[i].demand_slope for i in range(p)]
+        sales = 0
+        for market in range(countries.index(self) * p, (countries.index(self) + 1) * p):
+            sales += productions[market] * (prices[market%p] - countries[market%p].tariffs(self)[0])
 
-        producer_surplus = price**2 / (2 * self.production_cost)
-        consumer_surplus = demand * (self.population - demand) / 2
+        producer_surplus = sales - self.production_cost * sum(productions[countries.index(self) * p:\
+        (countries.index(self) + 1) * p])**2 / 2
+        consumer surplus = (self.population / self.demand_slope - prices[countries.index(self)]) * \
+        consumptions[countries.index(self)] / 2
+        tariffs = np.array([list(country.tariffs.values()) for country in countries]).flatten()
 
-        return producer_surplus + consumer_surplus
+        state = np.concatenate((productions.flatten, tariffs))
+        reward = producer_surplus + consumer_surplus
+
+        return state, reward
 
     def __optimizeTariff(self, other_country, debug = False):
         returns = [(i, self.__evaluateTariff(other_country, i)) for i in range(11)]
@@ -79,29 +108,6 @@ class World():
             country.set_policies(self.countries)
         for country in self.countries:
             country.resolve_policies(self.countries)
-
-
-    def __evaluatePolicy(self):
-        p = len(self.countries)
-        y = np.array([self.countries[int(country / p)].demand_slope * self.countries[int(country / p)]\
-        .tariffs(self.countries[country%p])[0] + self.countries[int(country / p)].population\
-        for country in range(p**2)])
-        X = np.zeros((p, p))
-        for producer in range(p):
-            for market in range(p):
-                for i in range(p):
-                    for j in range(p):
-                        if i = producer:
-                            if j = market:
-                                X[Country.index(producer, market, p), Country.index(i,j,p)] = 2 - 2 * \
-                                self.countries[producer].production_cost * self.countries[market].demand_slope
-                            else:
-                                X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * self.countries\
-                                [producer].production_cost * self.countries[market].demand_slope
-                        elif j = market:
-                            X[Country.index(producer, market, p), Country.index(i,j,p)] = 2
-        production = np.linalg.solve(X, y)
-
 
     def display(self):
         for country in range(len(self.countries)):

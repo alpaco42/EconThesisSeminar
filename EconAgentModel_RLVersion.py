@@ -2,6 +2,18 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+
+import json
+#import numpy as np
+#import random
+from keras.models import Sequential
+from keras.layers.core import Dense
+from keras.optimizers import sgd
+#import matplotlib.pyplot as plt
+# import matplotlib.animation
+# import IPython.display
+
+
 NUMCOUNTRIES = 20
 AVGPOP = 100
 AVGPRODCOST = 3

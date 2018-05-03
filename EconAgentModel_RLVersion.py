@@ -24,7 +24,7 @@ epsilon = .1  # probability of exploration (choosing a random action instead of 
 state_space = 2 * NUMCOUNTRIES ** 2
 action_space = 2**(NUMCOUNTRIES - 1)
 max_memory = 500
-hidden_size = 100
+hidden_size = 2 * state_space
 batch_size = 50
 
 class Country():
@@ -136,8 +136,8 @@ class Agent(Country):
 class World():
 
     def __init__(self, starting_model):
-        self.countries = [Agent(starting_model) for country in range(NUMCOUNTRIES - 1)] + [Actor()]
-        self.reset()
+        self.countries = None
+        self.reset(starting_model)
 
     def display(self):
         for country in range(len(self.countries)):
@@ -145,7 +145,8 @@ class World():
             plt.bar(country, FTAs)
         plt.show(block = False)
 
-    def reset(self):
+    def reset(self, starting_model):
+        self.countries = [Agent(starting_model) for country in range(NUMCOUNTRIES - 1)] + [Actor()]
         for i in self.countries:
             i.initialize(self.countries)
         for i in self.countries:
@@ -242,19 +243,24 @@ def build_model():
     # Initialize experience replay object
     exp_replay = ExperienceReplay(max_memory=max_memory)
 
-    return model, env, exp_replay
+    return model, agent_model, env, exp_replay
 
 
-def train_model(model, env, exp_replay, num_episodes):
+def train_model(model, agent_model, env, exp_replay, num_episodes):
     '''
     Inputs:
         model, env, and exp_replay objects as returned by build_model
         num_episodes: integer, the number of episodes that should be rolled out for training
     '''
-    for episode in range(num_episodes):  #I've changed this from Jen's basket game such that countries go through a set
+    for episode in range(1, num_episodes + 1):  #I've changed this from Jen's basket game such that countries go through a set
                                          #number of rounds of setting trade policies before the world is reset
+
+        if episode%100 == 0:
+            agent_model.set_weights(model.get_weights())
+            exp_replay.memory = list()
+
         loss = 0.
-        env.reset()
+        env.reset(agent_model)
         # get initial input
         starting_observation = env.countries[-1].state
 
@@ -285,5 +291,5 @@ def train_model(model, env, exp_replay, num_episodes):
 
         # Print update from this episode
         print("Episode {:04d}/{:04d} | Loss {:.4f}".format(episode, num_episodes-1, loss))
-model, env, exp_replay = build_model()
-train_model(model, env, exp_replay, num_episodes=1000)
+model, agent_model, env, exp_replay = build_model()
+train_model(model, agent_model, env, exp_replay, num_episodes=1000)

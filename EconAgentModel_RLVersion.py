@@ -14,13 +14,14 @@ from keras.optimizers import sgd
 # import IPython.display
 
 
-NUMCOUNTRIES = 20
+NUMCOUNTRIES = 10
 AVGPOP = 100
 AVGPRODCOST = 3
 DEMAND = 3
 # parameters
 epsilon = .1  # probability of exploration (choosing a random action instead of the current best one)
-state_space = NUMCOUNTRIES ** 4 + NUMCOUNTRIES ** 2
+#state_space = NUMCOUNTRIES ** 4 + NUMCOUNTRIES ** 2
+state_space = 2 * NUMCOUNTRIES ** 2
 action_space = 2**(NUMCOUNTRIES - 1)
 max_memory = 500
 hidden_size = 100
@@ -42,13 +43,22 @@ class Country():
     def index(i, j, p):
         return i * p + j
 
+    @staticmethod
+    def tariffs_from_action(action, countries):
+        slength = '0' + str(NUMCOUNTRIES - 1) + 'b'
+        policies = format(action, slength)
+        tariffs = {countries[-1]: [0, False]}
+        for policy in range(len(policies)):
+            tariffs[countries[policy]] = [10, policies[policy]]
+        return tariffs
+
     def tariffs(self):
         return sum([i[0] for i in list(self.tariffs.values())])
 
     def initialize(self, countries):
         index = countries.index(self)
         self.countries = countries[:index] + countries[index + 1:] + [self]
-        for country in countries[:-1]:
+        for country in self.countries[:-1]:
             self.tariffs[country] = [10, round(random.random())]
 
     def _evaluatePolicy(self):
@@ -73,18 +83,19 @@ class Country():
                             except IndexError:
                                 print (X.shape, Country.index(producer, market, p), Country.index(i,j,p))
         productions = np.maximum(np.linalg.solve(X,y), 0)
-        tariffs = np.array([list(country.tariffs.values()) for country in self.countries]).flatten()
-        self.state = np.concatenate((productions.flatten, tariffs))
+        tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
+        self.state = np.concatenate((productions.flatten(), tariffs))
+
+    def update_policies(self):
+        self.tariffs = self.new_tariffs
 
     def resolve_policies(self):
-        for country in self.countries:
-            country.tariffs = country.new_tariffs
-            if country != self:
-                if country.new_tariffs[self][1]:
-                    if self.tariffs[country][1]:
-                        self.tariffs[country] = [0, True]
-                else:
-                    self.tariffs[country][1] = False
+        for country in self.countries[:-1]:
+            if country.tariffs[self][1]:
+                if self.tariffs[country][1]:
+                    self.tariffs[country] = [0, True]
+            else:
+                self.tariffs[country][1] = False
 
 class Actor(Country):
     """The object for the model that's actually training"""
@@ -114,8 +125,8 @@ class Agent(Country):
 
     def set_policies(self):
         self._evaluatePolicy()
-        t = self.model.predict(self.state)    #JEN? Not sure if the syntax is right here...
-        self.new_tariffs = {self.countries[i]:[10, t[i]] for i in range(len(t))}
+        t = np.argmax(self.model.predict(np.expand_dims(self.state, axis = 0))[0])
+        self.new_tariffs = Country.tariffs_from_action(t, self.countries)
         if self.new_tariffs[self] != [0, False]:
             raise RuntimeError("Reflexive tariff policy is being adjusted")
 
@@ -139,12 +150,15 @@ class World():
             i.initialize(self.countries)
         for i in self.countries:
             i.resolve_policies()
+        for i in self.countries:
+            i._evaluatePolicy()
 
     def _update_state(self, action):
-        self.countries[-1].new_tariffs = {self.countries[-1].countries[i]:[10, action[i]] for i in range(len(action))}\
-        + {self: [0, False]}
+        self.countries[-1].new_tariffs = Country.tariffs_from_action(action, self.countries[-1].countries)
         for country in self.countries[:-1]:
             country.set_policies()
+        for country in self.countries:
+            country.update_policies()
         for country in self.countries:
             country.resolve_policies()
 
@@ -152,7 +166,7 @@ class World():
         return self.countries[-1]._get_reward()
 
     def act(self, action):
-        self._update_state(self, action)
+        self._update_state(action)
         observation = self.countries[-1].state
         reward = self.countries[-1]._get_reward()
         return observation, reward
@@ -191,13 +205,14 @@ class ExperienceReplay(object):
         inputs = np.zeros((input_size, env_dim))
         targets = np.zeros((input_size, action_space))
         for i, idx in enumerate(np.random.randint(0, len_memory, size=input_size)):
-            starting_observation, action_taken, reward_received, new_observation = self.memory[idx][0]
+            starting_observation, action_taken, reward_received, new_observation = self.memory[idx]
 
             # Set the input to the state that was observed in the game before an action was taken
             inputs[i:i+1] = starting_observation
 
             # Start with the model's current best guesses about the value of taking each action from this state
-            targets[i] = model.predict(starting_observation)[0]
+            targets[i] = model.predict(starting_observation.reshape((1,state_space)))[0] #honestly have no clue why i have to
+                                                                                 #reshape but it works now
 
             targets[i, action_taken] = reward_received
         return inputs, targets
@@ -213,9 +228,16 @@ def build_model():
     model.add(Dense(action_space))
     model.compile(sgd(lr=.2), "mse")
 
+    agent_model = Sequential()
+    agent_model.add(Dense(hidden_size, input_shape=(state_space,), activation='relu')) #@jen is that comma supposed to be there?
+    agent_model.add(Dense(hidden_size, activation='relu'))
+    agent_model.add(Dense(action_space))
+    agent_model.compile(sgd(lr=.2), "mse")
+
     # Define environment/game
-    env = World(model)  #JEN: I'm not sure if I can actually just give the untrained model as a starting model and it
+    env = World(agent_model)  #JEN: I'm not sure if I can actually just give the untrained model as a starting model and it
                         #will correctly act as functionally random...
+                        #--> make this a copy
 
     # Initialize experience replay object
     exp_replay = ExperienceReplay(max_memory=max_memory)
@@ -240,10 +262,11 @@ def train_model(model, env, exp_replay, num_episodes):
             # get next action
             if np.random.rand() <= epsilon:
                 # epsilon of the time, we just choose randomly
-                action = [np.random.randint(2) for country in countries]
+                action = np.random.randint(2 ** (NUMCOUNTRIES - 1))
             else:
                 # find which action the model currently thinks is best from this state
-                q = model.predict(starting_observation)
+                # print (np.expand_dims(starting_observation, axis = 0).shape, len(starting_observation))
+                q = model.predict(np.expand_dims(starting_observation, axis = 0))
                 action = np.argmax(q[0])
 
             # apply action, get rewards and new state
@@ -262,3 +285,5 @@ def train_model(model, env, exp_replay, num_episodes):
 
         # Print update from this episode
         print("Episode {:04d}/{:04d} | Loss {:.4f}".format(episode, num_episodes-1, loss))
+model, env, exp_replay = build_model()
+train_model(model, env, exp_replay, num_episodes=1000)

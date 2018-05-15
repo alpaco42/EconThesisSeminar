@@ -14,11 +14,12 @@ from keras.optimizers import sgd
 # import IPython.display
 
 
-NUMCOUNTRIES = 5
+NUMCOUNTRIES = 15
 AVGPOP = 10000
-AVGPRODCOST = 3
+AVGPRODCOST = 0.01
+AVGPRODBASE = 5
 DEMAND = 3
-TARIFF = 2
+TARIFF = 0.01
 # parameters
 epsilon = .05  # probability of exploration (choosing a random action instead of the current best one)
 #state_space = NUMCOUNTRIES ** 4 + NUMCOUNTRIES ** 2
@@ -32,7 +33,8 @@ class Country():
 
     def __init__(self):
         self.population = int(np.random.normal(AVGPOP, AVGPOP / 5))
-        self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 5)
+        self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 10)
+        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODCOST / 5)
         self.demand_slope = DEMAND
         self.relative_gains = float()
         self.tariffs = {self:[0, False]}
@@ -95,8 +97,27 @@ class Actor(Country):
         (self.countries.index(self) + 1) * p])**2 / 2
         consumer_surplus = (self.population / self.demand_slope - prices[self.countries.index(self)]) * \
         consumptions[self.countries.index(self)] / 2
+        max_consumption_surplus = self.population**2 / (2 * self.demand_slope)
 
-        return producer_surplus + consumer_surplus
+        y = np.array([ (1 - self.countries[country].tariffs[self][0]) * \
+        self.countries[country].population / self.countries[country].demand_slope + \
+        self.production_base for country in range(p)])
+        X = np.zeros((p,p))
+        for market in range(p):
+            for production in range(p):
+                if production == market:
+                    X[market, production] = 2 * (1 - self.countries[production].tariffs[self][0]) \
+                    / self.countries[production].demand_slope  - self.production_cost
+                else:
+                    X[market, production] = -1 * self.production_cost
+        mx_prd = np.linalg.solve(X,y)
+        max_prod_surplus = sum([mx_prd[i] * prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
+        print (max_prod_surplus, self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd))
+        max_prod_surplus -= self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd)
+
+
+        # print (producer_surplus, max_prod_surplus, consumer_surplus / max_consumption_surplus)
+        return producer_surplus / max_prod_surplus + consumer_surplus / max_consumption_surplus
 
 class Agent(Country):
     """The object for the agents interacting with the model but not training"""
@@ -144,8 +165,9 @@ class World():
         p = NUMCOUNTRIES
         # y = np.array([self.countries[int(country / p)].demand_slope * self.countries[int(country / p)].tariffs\
         # [self.countries[country%p]][0] + self.countries[int(country / p)].population for country in range(p**2)])
-        y = np.array([ (self.countries[country%p].tariffs[self.countries[int(country/p)]][0] - 1) * \
-        self.countries[country%p].population / self.countries[country%p].demand_slope for country in range(p**2)])
+        y = np.array([ (1 - self.countries[country%p].tariffs[self.countries[int(country/p)]][0]) * \
+        self.countries[country%p].population / self.countries[country%p].demand_slope + \
+        self.countries[int(country/p)].production_base for country in range(p**2)])
         X = np.zeros((p**2, p**2))
         for producer in range(p):
             for market in range(p):
@@ -155,17 +177,69 @@ class World():
                             if i == producer:
                                 X[Country.index(producer, market, p), Country.index(i,j,p)] = 2 * \
                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
-                                + self.countries[i].production_cost
+                                - self.countries[i].production_cost
                             else:
                                 X[Country.index(producer, market, p), Country.index(i,j,p)] = \
                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
                         elif i == producer:
-                            X[Country.index(producer, market, p), Country.index(i,j,p)] = \
+                            X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
                             self.countries[i].production_cost
         # productions = np.maximum(np.linalg.solve(X,y), 0)
-        productions = np.linalg.solve(X,y)
+        productions = np.linalg.solve(X,y).flatten()
         tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
-        self.state = np.concatenate((productions.flatten(), tariffs))
+
+        self.state = np.concatenate((productions, tariffs))
+        for i in self.state:
+            if i<0:
+                print (i)
+
+
+        #all the below is old code we used to sequentially update productions after setting negative productions to 0
+        # print (productions)
+        #
+        # order = {i:i for i in range(p**2)}
+        # new_variables = [i for i in range(p**2)]
+        # for s in range(p**2):
+        #     if productions[s] < 0:
+        #         new_variables.remove(s)
+        #         for i in range(s + 1, p**2):
+        #             order[i] -= 1
+        #
+        # y = []
+        # X = np.zeros((len(new_variables), len(new_variables)))
+        # for producer in range(p):
+        #     for market in range(p):
+        #         if Country.index(producer, market, p) in new_variables:
+        #             y.append((self.countries[market].tariffs[self.countries[producer]][0] - 1) * \
+        #             self.countries[market].population / self.countries[market].demand_slope)
+        #
+        #             for i in range(p):
+        #                 for j in range(p):
+        #                     if Country.index(i, j, p) in new_variables:
+        #                         if j == market:
+        #                             if i == producer:
+        #                                 X[order[Country.index(producer, market, p)], order[Country.index(i,j,p)]] = 2 * \
+        #                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
+        #                                 + self.countries[i].production_cost
+        #                             else:
+        #                                 X[order[Country.index(producer, market, p)], order[Country.index(i,j,p)]] = \
+        #                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
+        #                         elif i == producer:
+        #                             X[order[Country.index(producer, market, p)], order[Country.index(i,j,p)]] = \
+        #                             self.countries[i].production_cost
+        # new_productions = np.linalg.solve(X,y)
+        # final_productions = np.zeros(p**2)
+        # for production in range(p**2):
+        #     if production in new_variables:
+        #         final_productions[production] = new_productions[order[production]]
+        #
+        # self.state = np.concatenate((final_productions, tariffs))
+        # kms = 0
+        # for i in self.state:
+        #     if i < 0:
+        #         kms += 1
+        #
+        # print (kms)
 
     def _update_state(self, actions):
         self._evaluatePolicy()
@@ -305,4 +379,4 @@ def train_model(model, agent_model, env, exp_replay, num_episodes):
         # Print update from this episode
         print("Episode {:04d}/{:04d} | Loss {:.4f}".format(episode, num_episodes-1, loss))
 model, agent_model, env, exp_replay = build_model()
-# train_model(model, agent_model, env, exp_replay, num_episodes=1000)
+train_model(model, agent_model, env, exp_replay, num_episodes=1000)

@@ -32,9 +32,9 @@ batch_size = 50
 class Country():
 
     def __init__(self):
-        self.population = int(np.random.normal(AVGPOP, AVGPOP / 5))
-        self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 10)
-        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODCOST / 5)
+        self.population = int(np.random.normal(AVGPOP, AVGPOP / 7))
+        self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 7)
+        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODCOST / 7)
         self.demand_slope = DEMAND
         self.relative_gains = float()
         self.tariffs = {self:[0, False]}
@@ -85,16 +85,18 @@ class Actor(Country):
     """The object for the model that's actually training"""
 
     def _get_reward(self):
+        """Normalization is not implemented correctly right now"""
         p = NUMCOUNTRIES
         productions = self.state[:p**2]
         consumptions = [sum(productions.reshape((p,p))[:,i]) for i in range(p)]
         prices = [(self.countries[i].population - consumptions[i]) / self.countries[i].demand_slope for i in range(p)]
         sales = 0
         for market in range(self.countries.index(self) * p, (self.countries.index(self) + 1) * p):
-            sales += productions[market] * (prices[market%p] - self.countries[market%p].tariffs[self][0])
+            sales += productions[market] * prices[market%p] * (1- self.countries[market%p].tariffs[self][0])
 
         producer_surplus = sales - self.production_cost * sum(productions[self.countries.index(self) * p:\
-        (self.countries.index(self) + 1) * p])**2 / 2
+        (self.countries.index(self) + 1) * p])**2 / 2 - \
+        sum(productions[self.countries.index(self) * p:(self.countries.index(self) + 1) * p]) * self.production_base
         consumer_surplus = (self.population / self.demand_slope - prices[self.countries.index(self)]) * \
         consumptions[self.countries.index(self)] / 2
         max_consumption_surplus = self.population**2 / (2 * self.demand_slope)
@@ -112,11 +114,11 @@ class Actor(Country):
                     X[market, production] = -1 * self.production_cost
         mx_prd = np.linalg.solve(X,y)
         max_prod_surplus = sum([mx_prd[i] * prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
-        print (max_prod_surplus, self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd))
+        # print (max_prod_surplus, self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd))
         max_prod_surplus -= self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd)
 
 
-        # print (producer_surplus, max_prod_surplus, consumer_surplus / max_consumption_surplus)
+        print (producer_surplus, max_prod_surplus, producer_surplus/ max_prod_surplus, consumer_surplus / max_consumption_surplus)
         return producer_surplus / max_prod_surplus + consumer_surplus / max_consumption_surplus
 
 class Agent(Country):
@@ -252,6 +254,7 @@ class World():
 
     def _get_reward(self):
         return self.countries[-1]._get_reward()
+
 
     def act(self, actions):
         self._update_state(actions)

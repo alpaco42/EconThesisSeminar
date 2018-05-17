@@ -14,7 +14,7 @@ from keras.optimizers import sgd
 # import IPython.display
 
 
-NUMCOUNTRIES = 15
+NUMCOUNTRIES = 20
 AVGPOP = 10000
 AVGPRODCOST = 0.01
 AVGPRODBASE = 5
@@ -23,11 +23,13 @@ TARIFF = 0.01
 # parameters
 epsilon = .05  # probability of exploration (choosing a random action instead of the current best one)
 #state_space = NUMCOUNTRIES ** 4 + NUMCOUNTRIES ** 2
-state_space = 2 * NUMCOUNTRIES ** 2
+#state_space = 2 * NUMCOUNTRIES ** 2
+state_space = NUMCOUNTRIES ** 2 + 3 * NUMCOUNTRIES
 action_space = 2
 max_memory = 500
 hidden_size = 2 * state_space
 batch_size = 50
+debug_data = []
 
 class Country():
 
@@ -40,6 +42,7 @@ class Country():
         self.tariffs = {self:[0, False]}
         self.state = None
         self.countries = None
+        self.global_inputs = None
         self.index = None
         self.new_tariffs = {self:[0, False]}
 
@@ -50,20 +53,23 @@ class Country():
     def tariffs(self):
         return sum([i[0] for i in list(self.tariffs.values())])
 
-    def initialize(self, countries):
+    def initialize(self, countries, global_inputs):
         self.index = countries.index(self)
+        self.global_inputs = global_inputs[:self.index * 3] + global_inputs[(self.index + 1) * 3:] + \
+        global_inputs[self.index * 3: (self.index + 1) * 3]
         self.countries = countries[:self.index] + countries[self.index + 1:] + [self]
         for country in self.countries[:-1]:
             self.new_tariffs[country] = [TARIFF, round(random.random())]
         self.tariffs = self.new_tariffs
 
-    def adjust_state(self, country):
+    def get_inputs(self, country):
         p = NUMCOUNTRIES
-        state = list(self.state)
-        state = state[p * country: p * (country + 1)] +  state[:p * country] + state[p * (country + 1): p**2] + \
-        state[p**2 + p * country: p**2 + p * (country + 1)] +  state[p**2:p**2 + p * country] + \
-        state[p**2 + p * (country + 1):]
-        return np.array(state)
+        state = list(self.state[p**2:])
+        state = state[p * country: p * (country + 1)] +  state[:p * country] + state[p * (country + 1):]
+        inputs = self.global_inputs[3 * country: 3 * (country + 1)] + self.global_inputs[:3 * country] + \
+        self.global_inputs[3 * (country + 1):]
+
+        return np.array(inputs + state)
 
     def _evaluatePolicy(self, world_state):
         p = NUMCOUNTRIES
@@ -86,6 +92,9 @@ class Actor(Country):
 
     def _get_reward(self):
         """Normalization is not implemented correctly right now"""
+
+        debug_data = []
+
         p = NUMCOUNTRIES
         productions = self.state[:p**2]
         consumptions = [sum(productions.reshape((p,p))[:,i]) for i in range(p)]
@@ -100,24 +109,24 @@ class Actor(Country):
         consumptions[self.countries.index(self)] / 2
         max_consumption_surplus = self.population**2 / (2 * self.demand_slope)
 
-        y = np.array([ (1 - self.countries[country].tariffs[self][0]) * \
+        y = np.array([ (self.countries[country].tariffs[self][0] - 1) * \
         self.countries[country].population / self.countries[country].demand_slope + \
         self.production_base for country in range(p)])
         X = np.zeros((p,p))
         for market in range(p):
             for production in range(p):
                 if production == market:
-                    X[market, production] = 2 * (1 - self.countries[production].tariffs[self][0]) \
+                    X[market, production] = -2 * (1 - self.countries[production].tariffs[self][0]) \
                     / self.countries[production].demand_slope  - self.production_cost
                 else:
                     X[market, production] = -1 * self.production_cost
         mx_prd = np.linalg.solve(X,y)
         max_prod_surplus = sum([mx_prd[i] * prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
-        print (max_prod_surplus, self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd))
         max_prod_surplus -= self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd)
+        debug_data += [producer_surplus, max_prod_surplus, consumer_surplus / max_consumption_surplus]
+        print (debug_data)
 
 
-        # print (producer_surplus, max_prod_surplus, consumer_surplus / max_consumption_surplus)
         return producer_surplus / max_prod_surplus + consumer_surplus / max_consumption_surplus
 
 class Agent(Country):
@@ -131,7 +140,7 @@ class Agent(Country):
         p = NUMCOUNTRIES
         self._evaluatePolicy(world_state)
         for country in range(len(self.countries[:-1])):
-            t = np.argmax(self.model.predict(np.expand_dims(self.adjust_state(country), axis = 0))[0])
+            t = np.argmax(self.model.predict(np.expand_dims(self.get_inputs(country), axis = 0))[0])
             self.new_tariffs[self.countries[country]] = [TARIFF, t]
         if self.new_tariffs[self] != [0, False]:
             raise RuntimeError("Reflexive tariff policy is being adjusted")
@@ -144,6 +153,7 @@ class World():
     def __init__(self, starting_model):
         self.countries = None
         self.state = None
+        self.inputs_to_NN = None
         self.reset(starting_model)
 
     def display(self):
@@ -154,8 +164,11 @@ class World():
 
     def reset(self, starting_model):
         self.countries = [Agent(starting_model) for country in range(NUMCOUNTRIES - 1)] + [Actor()]
+        self.inputs_to_NN = []
+        for country in self.countries:
+            self.inputs_to_NN += [country.population, country.production_cost, country.production_base]
         for i in self.countries:
-            i.initialize(self.countries)
+            i.initialize(self.countries, self.inputs_to_NN)
         for i in self.countries:
             i.resolve_policies()
         self._evaluatePolicy()
@@ -353,7 +366,7 @@ def train_model(model, agent_model, env, exp_replay, num_episodes):
         for i in range(30):
             # get next action
             actions = []
-            starting_observations = [env.countries[-1].adjust_state(country) for country in range(NUMCOUNTRIES - 1)]
+            starting_observations = [env.countries[-1].get_inputs(country) for country in range(NUMCOUNTRIES - 1)]
             for country in range(NUMCOUNTRIES - 1):
                 if np.random.rand() <= epsilon:
                     # epsilon of the time, we just choose randomly
@@ -370,7 +383,7 @@ def train_model(model, agent_model, env, exp_replay, num_episodes):
             # store experience
             for country in range(NUMCOUNTRIES - 1):
                 exp_replay.remember([starting_observations[country], actions[country], \
-                reward, env.countries[-1].adjust_state(country)])
+                reward, env.countries[-1].get_inputs(country)])
 
             # get data updated based on the stored experiences
         inputs, targets = exp_replay.get_batch(model, batch_size=batch_size)

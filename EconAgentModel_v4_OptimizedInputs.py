@@ -9,6 +9,7 @@ import time
 from keras.models import Sequential
 from keras.layers.core import Dense
 from keras.optimizers import sgd
+from keras.regularizers import l2
 #import matplotlib.pyplot as plt
 # import matplotlib.animation
 # import IPython.display
@@ -16,10 +17,10 @@ from keras.optimizers import sgd
 
 NUMCOUNTRIES = 20
 AVGPOP = 10000
-AVGPRODCOST = 0.01
-AVGPRODBASE = 5
+AVGPRODCOST = 0.001
+AVGPRODBASE = 50
 DEMAND = 3
-TARIFF = 0.01
+TARIFF = 0.1
 # parameters
 epsilon = .05  # probability of exploration (choosing a random action instead of the current best one)
 #state_space = NUMCOUNTRIES ** 4 + NUMCOUNTRIES ** 2
@@ -27,16 +28,16 @@ epsilon = .05  # probability of exploration (choosing a random action instead of
 state_space = NUMCOUNTRIES ** 2 + 3 * NUMCOUNTRIES
 action_space = 2
 max_memory = 500
-hidden_size = 2 * state_space
+hidden_size = int(2/3 * state_space)
 batch_size = 50
 debug_data = []
 
 class Country():
 
     def __init__(self):
-        self.population = int(np.random.normal(AVGPOP, AVGPOP / 7))
-        self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 7)
-        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODCOST / 7)
+        self.population = int(np.random.normal(AVGPOP, AVGPOP / 5))
+        self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 5)
+        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODCOST / 5)
         self.demand_slope = DEMAND
         self.relative_gains = float()
         self.tariffs = {self:[0, False]}
@@ -121,10 +122,12 @@ class Actor(Country):
                 else:
                     X[market, production] = -1 * self.production_cost
         mx_prd = np.linalg.solve(X,y)
-        max_prod_surplus = sum([mx_prd[i] * prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
+        # for prod in mx_prd:
+        #     if prod < 0:
+        #         print("i", prod)
+        mx_prices = [(self.countries[i].population - mx_prd[i]) / self.countries[i].demand_slope for i in range(p)]
+        max_prod_surplus = sum([mx_prd[i] * mx_prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
         max_prod_surplus -= self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd)
-        debug_data += [producer_surplus, max_prod_surplus, consumer_surplus / max_consumption_surplus]
-        print (debug_data)
 
 
         return producer_surplus / max_prod_surplus + consumer_surplus / max_consumption_surplus
@@ -135,6 +138,7 @@ class Agent(Country):
     def __init__(self, model):
         Country.__init__(self)
         self.model = model
+
 
     def set_policies(self, world_state):
         p = NUMCOUNTRIES
@@ -175,11 +179,12 @@ class World():
         for i in self.countries:
             i._evaluatePolicy(self.state)
 
+
     def _evaluatePolicy(self):
         p = NUMCOUNTRIES
         # y = np.array([self.countries[int(country / p)].demand_slope * self.countries[int(country / p)].tariffs\
         # [self.countries[country%p]][0] + self.countries[int(country / p)].population for country in range(p**2)])
-        y = np.array([ (1 - self.countries[country%p].tariffs[self.countries[int(country/p)]][0]) * \
+        y = np.array([ (self.countries[country%p].tariffs[self.countries[int(country/p)]][0] - 1) * \
         self.countries[country%p].population / self.countries[country%p].demand_slope + \
         self.countries[int(country/p)].production_base for country in range(p**2)])
         X = np.zeros((p**2, p**2))
@@ -189,23 +194,23 @@ class World():
                     for j in range(p):
                         if j == market:
                             if i == producer:
-                                X[Country.index(producer, market, p), Country.index(i,j,p)] = 2 * \
+                                X[Country.index(producer, market, p), Country.index(i,j,p)] = -2 * \
                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
                                 - self.countries[i].production_cost
                             else:
-                                X[Country.index(producer, market, p), Country.index(i,j,p)] = \
+                                X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
                         elif i == producer:
                             X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
                             self.countries[i].production_cost
-        # productions = np.maximum(np.linalg.solve(X,y), 0)
-        productions = np.linalg.solve(X,y).flatten()
+        productions = np.maximum(np.linalg.solve(X,y).flatten(), 0)
+        # productions = np.linalg.solve(X,y).flatten()
         tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
 
         self.state = np.concatenate((productions, tariffs))
-        for i in self.state:
-            if i<0:
-                print (i)
+        # for i in self.state:
+        #     if i<0:
+        #         print (i)
 
 
         #all the below is old code we used to sequentially update productions after setting negative productions to 0
@@ -256,7 +261,10 @@ class World():
         # print (kms)
 
     def _update_state(self, actions):
+        # st = time.time()
         self._evaluatePolicy()
+        # print (time.time() - st)
+        st = time.time()
         self.countries[-1].new_tariffs = {self.countries[-1].countries[i]:[TARIFF, actions[i]] for i in range(len(actions))}
         self.countries[-1].new_tariffs[self.countries[-1]] = [0, False]
         for country in self.countries[:-1]:
@@ -324,16 +332,21 @@ def build_model():
     '''
      Returns three initialized objects: the model, the environment, and the replay.
     '''
+
     model = Sequential()
-    model.add(Dense(hidden_size, input_shape=(state_space,), activation='relu')) #@jen is that comma supposed to be there?
-    model.add(Dense(hidden_size, activation='relu'))
-    model.add(Dense(action_space))
+    model.add(Dense(int(3/2 * state_space), input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
+    model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    model.add(Dense(action_space, kernel_regularizer=l2(0.0001)))
     model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
 
     agent_model = Sequential()
-    agent_model.add(Dense(hidden_size, input_shape=(state_space,), activation='relu')) #@jen is that comma supposed to be there?
-    agent_model.add(Dense(hidden_size, activation='relu'))
-    agent_model.add(Dense(action_space))
+    agent_model.add(Dense(int(3/2 * state_space), input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
+    agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    agent_model.add(Dense(action_space, kernel_regularizer=l2(0.0001)))
     agent_model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
 
     # Define environment/game
@@ -343,6 +356,7 @@ def build_model():
 
     # Initialize experience replay object
     exp_replay = ExperienceReplay(max_memory=max_memory)
+
 
     return model, agent_model, env, exp_replay
 
@@ -384,6 +398,9 @@ def train_model(model, agent_model, env, exp_replay, num_episodes):
             for country in range(NUMCOUNTRIES - 1):
                 exp_replay.remember([starting_observations[country], actions[country], \
                 reward, env.countries[-1].get_inputs(country)])
+
+
+
 
             # get data updated based on the stored experiences
         inputs, targets = exp_replay.get_batch(model, batch_size=batch_size)

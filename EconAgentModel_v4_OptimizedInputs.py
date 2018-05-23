@@ -2,6 +2,8 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import scipy.sparse as sparse
+import scipy.sparse.linalg as linalg
 
 #import json
 #import numpy as np
@@ -15,7 +17,7 @@ from keras.regularizers import l2
 # import IPython.display
 
 
-NUMCOUNTRIES = 20
+NUMCOUNTRIES = 100
 AVGPOP = 10000
 AVGPRODCOST = 0.001
 AVGPRODBASE = 50
@@ -28,8 +30,8 @@ epsilon = .05  # probability of exploration (choosing a random action instead of
 state_space = NUMCOUNTRIES ** 2 + 3 * NUMCOUNTRIES
 action_space = 2
 max_memory = 500
-hidden_size = int(2/3 * state_space)
-batch_size = 50
+hidden_size = int(action_space + (state_space - action_space)/ 2)
+batch_size = 50 # JEN can i just increase this?
 debug_data = []
 
 class Country():
@@ -37,7 +39,7 @@ class Country():
     def __init__(self):
         self.population = int(np.random.normal(AVGPOP, AVGPOP / 5))
         self.production_cost = np.random.normal(AVGPRODCOST, AVGPRODCOST / 5)
-        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODCOST / 5)
+        self.production_base = np.random.normal(AVGPRODBASE, AVGPRODBASE / 5)
         self.demand_slope = DEMAND
         self.relative_gains = float()
         self.tariffs = {self:[0, False]}
@@ -52,7 +54,7 @@ class Country():
         return i * p + j
 
     def tariffs(self):
-        return sum([i[0] for i in list(self.tariffs.values())])
+        return sum([i[0] for i in self.tariffs.values()])
 
     def initialize(self, countries, global_inputs):
         self.index = countries.index(self)
@@ -98,8 +100,10 @@ class Actor(Country):
 
         p = NUMCOUNTRIES
         productions = self.state[:p**2]
-        consumptions = [sum(productions.reshape((p,p))[:,i]) for i in range(p)]
+        reshape = productions.reshape((p,p))
+        consumptions = [sum(reshape[:,i]) for i in range(p)]
         prices = [(self.countries[i].population - consumptions[i]) / self.countries[i].demand_slope for i in range(p)]
+        # print(prices)
         sales = 0
         for market in range(self.countries.index(self) * p, (self.countries.index(self) + 1) * p):
             sales += productions[market] * (prices[market%p] - self.countries[market%p].tariffs[self][0])
@@ -135,26 +139,35 @@ class Actor(Country):
 class Agent(Country):
     """The object for the agents interacting with the model but not training"""
 
-    def __init__(self, model):
+    def __init__(self, model=None):
         Country.__init__(self)
         self.model = model
 
 
     def set_policies(self, world_state):
         p = NUMCOUNTRIES
+        st = time.time()
         self._evaluatePolicy(world_state)
-        for country in range(len(self.countries[:-1])):
-            t = np.argmax(self.model.predict(np.expand_dims(self.get_inputs(country), axis = 0))[0])
-            self.new_tariffs[self.countries[country]] = [TARIFF, t]
-        if self.new_tariffs[self] != [0, False]:
-            raise RuntimeError("Reflexive tariff policy is being adjusted")
+        # print ("-----evalPolicy", time.time() - st)
+        st = time.time()
+        if self.model == None:
+            policies = [int(random.random()) for i in range(p-1)]
+        else:
+            policies = self.model.predict(np.array([self.get_inputs(country) for country in range(p - 1)]))
+            policies = [np.argmax(policies[i]) for i in range(p-1)]
+
+        self.new_tariffs = {self.countries[country]:[TARIFF, policies[country]] for country in range(p-1)}
+        self.new_tariffs[self] = [0, False]
+
+        # print ("-----setpolicies", time.time() - st)
+
 
     def update_model(model):
         self.model = model
 
 class World():
 
-    def __init__(self, starting_model):
+    def __init__(self, starting_model = None):
         self.countries = None
         self.state = None
         self.inputs_to_NN = None
@@ -181,6 +194,38 @@ class World():
 
 
     def _evaluatePolicy(self):
+        #this is a sparse linalg implementation that turned out to be much much slower than regular linalg :(((
+        # p = NUMCOUNTRIES
+        # y = np.array([ (self.countries[country%p].tariffs[self.countries[int(country/p)]][0] - 1) * \
+        # self.countries[country%p].population / self.countries[country%p].demand_slope + \
+        # self.countries[int(country/p)].production_base for country in range(p**2)])
+        # X = sparse.lil_matrix(np.zeros((p**2, p**2)))
+        # for producer in range(p):
+        #     for market in range(p):
+        #         for i in range(p):
+        #             for j in range(p):
+        #                 if j == market:
+        #                     if i == producer:
+        #                         X[Country.index(producer, market, p), Country.index(i,j,p)] = -2 * \
+        #                         (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
+        #                         - self.countries[i].production_cost
+        #                     else:
+        #                         X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
+        #                         (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
+        #                 elif i == producer:
+        #                     X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
+        #                     self.countries[i].production_cost
+        # productions = np.maximum(linalg.spsolve(sparse.csc_matrix(X),y).flatten(), 0)
+        # # productions = np.linalg.solve(X,y).flatten()
+        # tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
+        #
+        # self.state = np.concatenate((productions, tariffs))
+        # print (time.time() - st)
+
+
+
+
+
         p = NUMCOUNTRIES
         # y = np.array([self.countries[int(country / p)].demand_slope * self.countries[int(country / p)].tariffs\
         # [self.countries[country%p]][0] + self.countries[int(country / p)].population for country in range(p**2)])
@@ -208,6 +253,19 @@ class World():
         tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
 
         self.state = np.concatenate((productions, tariffs))
+
+
+
+
+
+
+
+
+
+
+
+
+
         # for i in self.state:
         #     if i<0:
         #         print (i)
@@ -261,16 +319,22 @@ class World():
         # print (kms)
 
     def _update_state(self, actions):
-        # st = time.time()
+        st = time.time()
         self._evaluatePolicy()
-        # print (time.time() - st)
+        print ("evaluatePolicy", time.time() - st)
         st = time.time()
         self.countries[-1].new_tariffs = {self.countries[-1].countries[i]:[TARIFF, actions[i]] for i in range(len(actions))}
         self.countries[-1].new_tariffs[self.countries[-1]] = [0, False]
+        print ("new_tariffs", time.time() - st)
+        st = time.time()
         for country in self.countries[:-1]:
             country.set_policies(self.state)
+        print ("set_policies", time.time() - st)
+        st = time.time()
         for country in self.countries:
             country.resolve_policies()
+        print ("resolve_policies", time.time() - st)
+
 
     def _get_reward(self):
         return self.countries[-1]._get_reward()
@@ -311,7 +375,7 @@ class ExperienceReplay(object):
         len_memory = len(self.memory)
         action_space = model.output_shape[-1] # the number of possible actions
         env_dim = len(self.memory[0][0]) # the size of the state space --> @jen can i just make this state_space?
-        input_size = min(len_memory, state_space) #@jen why isn't this env_dim?
+        input_size = min(len_memory, batch_size) #@jen why isn't this env_dim?
         inputs = np.zeros((input_size, env_dim))
         targets = np.zeros((input_size, action_space))
         for i, idx in enumerate(np.random.randint(0, len_memory, size=input_size)):
@@ -334,25 +398,19 @@ def build_model():
     '''
 
     model = Sequential()
-    model.add(Dense(int(3/2 * state_space), input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
-    model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
-    model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    model.add(Dense(state_space, input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
     model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
     model.add(Dense(action_space, kernel_regularizer=l2(0.0001)))
     model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
 
     agent_model = Sequential()
-    agent_model.add(Dense(int(3/2 * state_space), input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
-    agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
-    agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
+    agent_model.add(Dense(state_space, input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
     agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
     agent_model.add(Dense(action_space, kernel_regularizer=l2(0.0001)))
     agent_model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
 
     # Define environment/game
-    env = World(agent_model)  #JEN: I'm not sure if I can actually just give the untrained model as a starting model and it
-                        #will correctly act as functionally random...
-                        #--> make this a copy
+    env = World(agent_model)
 
     # Initialize experience replay object
     exp_replay = ExperienceReplay(max_memory=max_memory)
@@ -361,54 +419,74 @@ def build_model():
     return model, agent_model, env, exp_replay
 
 
-def train_model(model, agent_model, env, exp_replay, num_episodes):
+def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = True):
     '''
     Inputs:
         model, env, and exp_replay objects as returned by build_model
         num_episodes: integer, the number of episodes that should be rolled out for training
     '''
+
+    progress = []
+
     for episode in range(1, num_episodes + 1):  #I've changed this from Jen's basket game such that countries go through a set
                                          #number of rounds of setting trade policies before the world is reset
 
-        if episode%100 == 0:
+        if update_env and episode%100 == 0:
             agent_model.set_weights(model.get_weights())
             exp_replay.memory = list()
 
         loss = 0.
+        # if episode >= 100:
+        #     env.reset(agent_model)
         env.reset(agent_model)
 
-        for i in range(30):
+        for i in range(15):
             # get next action
             actions = []
+            st = time.time()
             starting_observations = [env.countries[-1].get_inputs(country) for country in range(NUMCOUNTRIES - 1)]
+            print ("____starting_obs", time.time() - st)
+
+            st = time.time()
             for country in range(NUMCOUNTRIES - 1):
                 if np.random.rand() <= epsilon:
                     # epsilon of the time, we just choose randomly
                     actions.append(np.random.randint(2))
                 else:
                     # find which action the model currently thinks is best from this state
-                    # print (np.expand_dims(starting_observation, axis = 0).shape, len(starting_observation))
                     q = model.predict(np.expand_dims(starting_observations[country], axis = 0))
                     actions.append(np.argmax(q[0]))
+            print ("____agent_actions", time.time() - st)
 
             # apply action, get rewards and new state
+            st = time.time()
             reward = env.act(actions)
+            print ("____act", time.time() - st)
 
             # store experience
+
+            st = time.time()
             for country in range(NUMCOUNTRIES - 1):
                 exp_replay.remember([starting_observations[country], actions[country], \
                 reward, env.countries[-1].get_inputs(country)])
+            print ("____remember", time.time() - st)
 
 
-
+        st = time.time()
 
             # get data updated based on the stored experiences
         inputs, targets = exp_replay.get_batch(model, batch_size=batch_size)
 
         # train model on the updated data
         loss += model.train_on_batch(inputs, targets) #JENN why isn't memory being cleared after every train_model?
+        progress.append(loss)
+
+        print ("____training", time.time() - st)
+
 
         # Print update from this episode
-        print("Episode {:04d}/{:04d} | Loss {:.4f}".format(episode, num_episodes-1, loss))
+        print("Episode {:04d}/{:04d} | Loss {:.4f}".format(episode, num_episodes, loss))
+
+    return progress
 model, agent_model, env, exp_replay = build_model()
-train_model(model, agent_model, env, exp_replay, num_episodes=1000)
+progress = train_model(model, agent_model, env, exp_replay, num_episodes=1000)

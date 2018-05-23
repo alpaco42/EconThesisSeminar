@@ -17,7 +17,7 @@ from keras.regularizers import l2
 # import IPython.display
 
 
-NUMCOUNTRIES = 100
+NUMCOUNTRIES = 50
 AVGPOP = 10000
 AVGPRODCOST = 0.001
 AVGPRODBASE = 50
@@ -227,31 +227,47 @@ class World():
 
 
         p = NUMCOUNTRIES
-        # y = np.array([self.countries[int(country / p)].demand_slope * self.countries[int(country / p)].tariffs\
-        # [self.countries[country%p]][0] + self.countries[int(country / p)].population for country in range(p**2)])
+
+
+        # old_X = np.zeros((p**2,p**2))
+        # for producer in range(p):
+        #     for market in range(p):
+        #         for i in range(p):
+        #             for j in range(p):
+        #                 if j == market:
+        #                     if i == producer:
+        #                         old_X[Country.index(producer, market, p), Country.index(i,j,p)] = -2 * \
+        #                         (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
+        #                         - self.countries[i].production_cost
+        #                     else:
+        #                         old_X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
+        #                         (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
+        #                 elif i == producer:
+        #                     old_X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
+        #                     self.countries[i].production_cost
+        #
+
         y = np.array([ (self.countries[country%p].tariffs[self.countries[int(country/p)]][0] - 1) * \
         self.countries[country%p].population / self.countries[country%p].demand_slope + \
         self.countries[int(country/p)].production_base for country in range(p**2)])
         X = np.zeros((p**2, p**2))
         for producer in range(p):
             for market in range(p):
-                for i in range(p):
-                    for j in range(p):
-                        if j == market:
-                            if i == producer:
-                                X[Country.index(producer, market, p), Country.index(i,j,p)] = -2 * \
-                                (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
-                                - self.countries[i].production_cost
-                            else:
-                                X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
-                                (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
-                        elif i == producer:
-                            X[Country.index(producer, market, p), Country.index(i,j,p)] = -1 * \
-                            self.countries[i].production_cost
-        productions = np.maximum(np.linalg.solve(X,y).flatten(), 0)
-        # productions = np.linalg.solve(X,y).flatten()
-        tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
 
+                for i in range(p):
+                    X[Country.index(producer, market, p), Country.index(i, market, p)] = -1 * \
+                        (1 - self.countries[market].tariffs[self.countries[i]][0]) / self.countries[market].demand_slope
+                X[Country.index(producer, market, p), Country.index(producer, market, p)] *= 2
+
+                X[Country.index(producer, market, p), p * producer: p * (producer + 1)] -= \
+                    [self.countries[producer].production_cost for j in range(p)]
+
+        # if (old_X - X).any():
+        #     global debug_data
+        #     debug_data =  old_X - X
+        #     raise RuntimeError("Xs not equal")
+        productions = np.maximum(np.linalg.solve(X,y).flatten(), 0)
+        tariffs = np.array([[i[0] for i in list(country.tariffs.values())] for country in self.countries]).flatten()
         self.state = np.concatenate((productions, tariffs))
 
 
@@ -442,20 +458,27 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
 
         for i in range(15):
             # get next action
-            actions = []
             st = time.time()
             starting_observations = [env.countries[-1].get_inputs(country) for country in range(NUMCOUNTRIES - 1)]
             print ("____starting_obs", time.time() - st)
 
             st = time.time()
-            for country in range(NUMCOUNTRIES - 1):
-                if np.random.rand() <= epsilon:
-                    # epsilon of the time, we just choose randomly
-                    actions.append(np.random.randint(2))
-                else:
-                    # find which action the model currently thinks is best from this state
-                    q = model.predict(np.expand_dims(starting_observations[country], axis = 0))
-                    actions.append(np.argmax(q[0]))
+            # for country in range(NUMCOUNTRIES - 1):
+            #     if np.random.rand() <= epsilon:
+            #         # epsilon of the time, we just choose randomly
+            #         actions.append(np.random.randint(2))
+            #     else:
+            #         # find which action the model currently thinks is best from this state
+            #         q = model.predict(np.expand_dims(starting_observations[country], axis = 0))
+            #         actions.append(np.argmax(q[0]))
+
+            q = model.predict(np.array(starting_observations))
+            actions = [np.argmax(q[i]) for i in range(NUMCOUNTRIES-1)]
+
+            for action in range(len(actions)):
+                if random.random() <= epsilon:
+                    actions[action] = int(random.random())
+
             print ("____agent_actions", time.time() - st)
 
             # apply action, get rewards and new state

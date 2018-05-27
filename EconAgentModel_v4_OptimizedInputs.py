@@ -17,7 +17,7 @@ from keras.regularizers import l2
 # import IPython.display
 
 
-NUMCOUNTRIES = 50
+NUMCOUNTRIES = 100
 AVGPOP = 10000
 AVGPRODCOST = 0.001
 AVGPRODBASE = 50
@@ -31,7 +31,7 @@ state_space = NUMCOUNTRIES ** 2 + 3 * NUMCOUNTRIES
 action_space = 2
 max_memory = 500
 hidden_size = int(action_space + (state_space - action_space)/ 2)
-batch_size = 50 # JEN can i just increase this?
+batch_size = 100 # JEN can i just increase this?
 debug_data = []
 
 class Country():
@@ -66,13 +66,16 @@ class Country():
         self.tariffs = self.new_tariffs
 
     def get_inputs(self, country):
+
+        # st = time.time()
         p = NUMCOUNTRIES
-        state = list(self.state[p**2:])
-        state = state[p * country: p * (country + 1)] +  state[:p * country] + state[p * (country + 1):]
+        # st = time.time()
+        state = np.concatenate((self.state[p**2+p * country: p**2+p * (country+1)], self.state[p**2:p**2+p * country], \
+        self.state[p**2 + p * (country + 1):]))
         inputs = self.global_inputs[3 * country: 3 * (country + 1)] + self.global_inputs[:3 * country] + \
         self.global_inputs[3 * (country + 1):]
-
-        return np.array(inputs + state)
+        # print("----get_inputs", time.time() - st)
+        return np.concatenate((inputs, state))
 
     def _evaluatePolicy(self, world_state):
         p = NUMCOUNTRIES
@@ -146,20 +149,17 @@ class Agent(Country):
 
     def set_policies(self, world_state):
         p = NUMCOUNTRIES
-        st = time.time()
         self._evaluatePolicy(world_state)
-        # print ("-----evalPolicy", time.time() - st)
         st = time.time()
         if self.model == None:
-            policies = [int(random.random()) for i in range(p-1)]
+            policies = [1 for i in range(p-1)]
         else:
-            policies = self.model.predict(np.array([self.get_inputs(country) for country in range(p - 1)]))
+            policies = self.model.predict(np.array([self.get_inputs(country) for country in range(1, p - 1)]))
             policies = [np.argmax(policies[i]) for i in range(p-1)]
 
         self.new_tariffs = {self.countries[country]:[TARIFF, policies[country]] for country in range(p-1)}
         self.new_tariffs[self] = [0, False]
 
-        # print ("-----setpolicies", time.time() - st)
 
 
     def update_model(model):
@@ -335,21 +335,21 @@ class World():
         # print (kms)
 
     def _update_state(self, actions):
-        st = time.time()
+        # st = time.time()
         self._evaluatePolicy()
-        print ("evaluatePolicy", time.time() - st)
-        st = time.time()
+        # print ("evaluatePolicy", time.time() - st)
+        # st = time.time()
         self.countries[-1].new_tariffs = {self.countries[-1].countries[i]:[TARIFF, actions[i]] for i in range(len(actions))}
         self.countries[-1].new_tariffs[self.countries[-1]] = [0, False]
-        print ("new_tariffs", time.time() - st)
-        st = time.time()
+        # print ("new_tariffs", time.time() - st)
+        # st = time.time()
         for country in self.countries[:-1]:
             country.set_policies(self.state)
-        print ("set_policies", time.time() - st)
-        st = time.time()
+        # print ("set_policies", time.time() - st)
+        # st = time.time()
         for country in self.countries:
             country.resolve_policies()
-        print ("resolve_policies", time.time() - st)
+        # print ("resolve_policies", time.time() - st)
 
 
     def _get_reward(self):
@@ -426,7 +426,7 @@ def build_model():
     agent_model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
 
     # Define environment/game
-    env = World(agent_model)
+    env = World()
 
     # Initialize experience replay object
     exp_replay = ExperienceReplay(max_memory=max_memory)
@@ -452,17 +452,16 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
             exp_replay.memory = list()
 
         loss = 0.
-        # if episode >= 100:
-        #     env.reset(agent_model)
-        env.reset(agent_model)
+        if episode >= 100:
+            env.reset(agent_model)
 
         for i in range(15):
             # get next action
-            st = time.time()
+            # st = time.time()
             starting_observations = [env.countries[-1].get_inputs(country) for country in range(NUMCOUNTRIES - 1)]
-            print ("____starting_obs", time.time() - st)
+            # print ("____starting_obs", time.time() - st)
 
-            st = time.time()
+            # st = time.time()
             # for country in range(NUMCOUNTRIES - 1):
             #     if np.random.rand() <= epsilon:
             #         # epsilon of the time, we just choose randomly
@@ -479,23 +478,23 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
                 if random.random() <= epsilon:
                     actions[action] = int(random.random())
 
-            print ("____agent_actions", time.time() - st)
+            # print ("____agent_actions", time.time() - st)
 
             # apply action, get rewards and new state
-            st = time.time()
+            # st = time.time()
             reward = env.act(actions)
-            print ("____act", time.time() - st)
+            # print ("____act", time.time() - st)
 
             # store experience
 
-            st = time.time()
+            # st = time.time()
             for country in range(NUMCOUNTRIES - 1):
                 exp_replay.remember([starting_observations[country], actions[country], \
                 reward, env.countries[-1].get_inputs(country)])
-            print ("____remember", time.time() - st)
+            # print ("____remember", time.time() - st)
 
 
-        st = time.time()
+        # st = time.time()
 
             # get data updated based on the stored experiences
         inputs, targets = exp_replay.get_batch(model, batch_size=batch_size)
@@ -504,7 +503,7 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
         loss += model.train_on_batch(inputs, targets) #JENN why isn't memory being cleared after every train_model?
         progress.append(loss)
 
-        print ("____training", time.time() - st)
+        # print ("____training", time.time() - st)
 
 
         # Print update from this episode

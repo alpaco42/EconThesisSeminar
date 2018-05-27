@@ -16,22 +16,19 @@ from keras.regularizers import l2
 # import matplotlib.animation
 # import IPython.display
 
-
-NUMCOUNTRIES = 100
+# parameters
+NUMCOUNTRIES = 50
 AVGPOP = 10000
 AVGPRODCOST = 0.001
 AVGPRODBASE = 50
 DEMAND = 3
 TARIFF = 0.1
-# parameters
 epsilon = .05  # probability of exploration (choosing a random action instead of the current best one)
-#state_space = NUMCOUNTRIES ** 4 + NUMCOUNTRIES ** 2
-#state_space = 2 * NUMCOUNTRIES ** 2
 state_space = NUMCOUNTRIES ** 2 + 3 * NUMCOUNTRIES
 action_space = 2
 max_memory = 500
 hidden_size = int(action_space + (state_space - action_space)/ 2)
-batch_size = 100 # JEN can i just increase this?
+batch_size = 100
 debug_data = []
 
 class Country():
@@ -54,10 +51,13 @@ class Country():
         return i * p + j
 
     def tariffs(self):
+        """I dont think I use this anymore..."""
         return sum([i[0] for i in self.tariffs.values()])
 
     def initialize(self, countries, global_inputs):
         self.index = countries.index(self)
+        #global_inputs and countries have to be reordered so that the country setting tariffs is last.
+        #This is only actually necessary for agent objects, since the actor object's format is what's being immitated
         self.global_inputs = global_inputs[:self.index * 3] + global_inputs[(self.index + 1) * 3:] + \
         global_inputs[self.index * 3: (self.index + 1) * 3]
         self.countries = countries[:self.index] + countries[self.index + 1:] + [self]
@@ -66,26 +66,24 @@ class Country():
         self.tariffs = self.new_tariffs
 
     def get_inputs(self, country):
-
-        # st = time.time()
+        """reorders self.state and global_inputs so that the country's
+        info that tariffs are being set on is always first"""
         p = NUMCOUNTRIES
-        # st = time.time()
         state = np.concatenate((self.state[p**2+p * country: p**2+p * (country+1)], self.state[p**2:p**2+p * country], \
         self.state[p**2 + p * (country + 1):]))
         inputs = self.global_inputs[3 * country: 3 * (country + 1)] + self.global_inputs[:3 * country] + \
         self.global_inputs[3 * (country + 1):]
-        # print("----get_inputs", time.time() - st)
         return np.concatenate((inputs, state))
 
-    def _evaluatePolicy(self, world_state):
+    def evaluatePolicy(self, ws):
+        """reorders the globally updated state (ws) to match the agent object in question"""
         p = NUMCOUNTRIES
-        ws = list(world_state)
-        self.state = ws[: p * self.index] +  ws[p * (self.index + 1): p**2] + ws[p * self.index: p * (self.index + 1)] \
-        + ws[p**2: p**2 + p * self.index] + ws[p**2 + p * (self.index + 1):] + \
-        ws[p**2 + p * self.index: p**2 + p * (self.index + 1)]
-        self.state = np.array(self.state)
+        self.state = np.concatenate((ws[: p * self.index],  ws[p * (self.index+1): p**2], \
+            ws[p * self.index: p * (self.index+1)], ws[p**2: p**2 + p * self.index], ws[p**2 + p * (self.index+1):], \
+            ws[p**2+p * self.index: p**2+p * (self.index+1)]))
 
     def resolve_policies(self):
+        """Determines which diads agree to FTAs"""
         for country in self.countries[:-1]:
             if country.new_tariffs[self][1]:
                 if self.new_tariffs[country][1]:
@@ -94,10 +92,12 @@ class Country():
                 self.tariffs[country] = [TARIFF, False]
 
 class Actor(Country):
-    """The object for the model that's actually training"""
+    """The object that's actually training"""
 
-    def _get_reward(self):
-        """Normalization is not implemented correctly right now"""
+    def get_reward(self):
+        """Reward is calculated as the average of observed producer surplus divided by producer surplus if the country's
+        firm was a global monopoly and observed consumer surplus divded by the entire area under the demand curve"""
+
 
         debug_data = []
 
@@ -149,10 +149,11 @@ class Agent(Country):
 
     def set_policies(self, world_state):
         p = NUMCOUNTRIES
-        self._evaluatePolicy(world_state)
+        self.evaluatePolicy(world_state)
         st = time.time()
         if self.model == None:
-            policies = [1 for i in range(p-1)]
+            policies = [1 for i in range(p-1)] #first time around, all other countries always want FTAs so that the
+                                               #model's choices actually change the outcome
         else:
             policies = self.model.predict(np.array([self.get_inputs(country) for country in range(1, p - 1)]))
             policies = [np.argmax(policies[i]) for i in range(p-1)]
@@ -190,10 +191,12 @@ class World():
             i.resolve_policies()
         self._evaluatePolicy()
         for i in self.countries:
-            i._evaluatePolicy(self.state)
+            i.evaluatePolicy(self.state)
 
 
     def _evaluatePolicy(self):
+        """This function determines the optimal productions for every firm given the current tariff regimes by finding
+        the Nash equilibrium"""
         #this is a sparse linalg implementation that turned out to be much much slower than regular linalg :(((
         # p = NUMCOUNTRIES
         # y = np.array([ (self.countries[country%p].tariffs[self.countries[int(country/p)]][0] - 1) * \
@@ -228,7 +231,7 @@ class World():
 
         p = NUMCOUNTRIES
 
-
+        # this construction of the X matrix is more intuitive, but O(n^4) instead of O(n^3)
         # old_X = np.zeros((p**2,p**2))
         # for producer in range(p):
         #     for market in range(p):
@@ -273,99 +276,27 @@ class World():
 
 
 
-
-
-
-
-
-
-
-
-
         # for i in self.state:
         #     if i<0:
         #         print (i)
 
-
-        #all the below is old code we used to sequentially update productions after setting negative productions to 0
-        # print (productions)
-        #
-        # order = {i:i for i in range(p**2)}
-        # new_variables = [i for i in range(p**2)]
-        # for s in range(p**2):
-        #     if productions[s] < 0:
-        #         new_variables.remove(s)
-        #         for i in range(s + 1, p**2):
-        #             order[i] -= 1
-        #
-        # y = []
-        # X = np.zeros((len(new_variables), len(new_variables)))
-        # for producer in range(p):
-        #     for market in range(p):
-        #         if Country.index(producer, market, p) in new_variables:
-        #             y.append((self.countries[market].tariffs[self.countries[producer]][0] - 1) * \
-        #             self.countries[market].population / self.countries[market].demand_slope)
-        #
-        #             for i in range(p):
-        #                 for j in range(p):
-        #                     if Country.index(i, j, p) in new_variables:
-        #                         if j == market:
-        #                             if i == producer:
-        #                                 X[order[Country.index(producer, market, p)], order[Country.index(i,j,p)]] = 2 * \
-        #                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope \
-        #                                 + self.countries[i].production_cost
-        #                             else:
-        #                                 X[order[Country.index(producer, market, p)], order[Country.index(i,j,p)]] = \
-        #                                 (1 - self.countries[j].tariffs[self.countries[i]][0]) / self.countries[j].demand_slope
-        #                         elif i == producer:
-        #                             X[order[Country.index(producer, market, p)], order[Country.index(i,j,p)]] = \
-        #                             self.countries[i].production_cost
-        # new_productions = np.linalg.solve(X,y)
-        # final_productions = np.zeros(p**2)
-        # for production in range(p**2):
-        #     if production in new_variables:
-        #         final_productions[production] = new_productions[order[production]]
-        #
-        # self.state = np.concatenate((final_productions, tariffs))
-        # kms = 0
-        # for i in self.state:
-        #     if i < 0:
-        #         kms += 1
-        #
-        # print (kms)
-
     def _update_state(self, actions):
-        # st = time.time()
         self._evaluatePolicy()
-        # print ("evaluatePolicy", time.time() - st)
-        # st = time.time()
         self.countries[-1].new_tariffs = {self.countries[-1].countries[i]:[TARIFF, actions[i]] for i in range(len(actions))}
         self.countries[-1].new_tariffs[self.countries[-1]] = [0, False]
-        # print ("new_tariffs", time.time() - st)
-        # st = time.time()
         for country in self.countries[:-1]:
             country.set_policies(self.state)
-        # print ("set_policies", time.time() - st)
-        # st = time.time()
         for country in self.countries:
             country.resolve_policies()
-        # print ("resolve_policies", time.time() - st)
-
-
-    def _get_reward(self):
-        return self.countries[-1]._get_reward()
-
 
     def act(self, actions):
         self._update_state(actions)
-        reward = self.countries[-1]._get_reward()
+        reward = self.countries[-1].get_reward()
         return reward
 
 
-
-
 class ExperienceReplay(object):
-    def __init__(self, max_memory=100):
+    def __init__(self, max_memory=500):
         self.max_memory = max_memory
         self.memory = list()
 
@@ -373,7 +304,6 @@ class ExperienceReplay(object):
         '''
         Input:
             states: [starting_observation, action_taken, reward_received, new_observation]
-            game_over: boolean
         Add the states and game over to the internal memory array. If the array is longer than
         self.max_memory, drop the oldest memory
         '''
@@ -389,9 +319,9 @@ class ExperienceReplay(object):
             estimate of how valuable the new state is.
         '''
         len_memory = len(self.memory)
-        action_space = model.output_shape[-1] # the number of possible actions
-        env_dim = len(self.memory[0][0]) # the size of the state space --> @jen can i just make this state_space?
-        input_size = min(len_memory, batch_size) #@jen why isn't this env_dim?
+        action_space = model.output_shape[-1]
+        env_dim = len(self.memory[0][0])
+        input_size = min(len_memory, batch_size)
         inputs = np.zeros((input_size, env_dim))
         targets = np.zeros((input_size, action_space))
         for i, idx in enumerate(np.random.randint(0, len_memory, size=input_size)):
@@ -444,9 +374,9 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
 
     progress = []
 
-    for episode in range(1, num_episodes + 1):  #I've changed this from Jen's basket game such that countries go through a set
-                                         #number of rounds of setting trade policies before the world is reset
+    for episode in range(1, num_episodes + 1):
 
+        #every 100 simulations, update the decision calculus of all other agents with the weights of the model
         if update_env and episode%100 == 0:
             agent_model.set_weights(model.get_weights())
             exp_replay.memory = list()
@@ -457,20 +387,7 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
 
         for i in range(15):
             # get next action
-            # st = time.time()
             starting_observations = [env.countries[-1].get_inputs(country) for country in range(NUMCOUNTRIES - 1)]
-            # print ("____starting_obs", time.time() - st)
-
-            # st = time.time()
-            # for country in range(NUMCOUNTRIES - 1):
-            #     if np.random.rand() <= epsilon:
-            #         # epsilon of the time, we just choose randomly
-            #         actions.append(np.random.randint(2))
-            #     else:
-            #         # find which action the model currently thinks is best from this state
-            #         q = model.predict(np.expand_dims(starting_observations[country], axis = 0))
-            #         actions.append(np.argmax(q[0]))
-
             q = model.predict(np.array(starting_observations))
             actions = [np.argmax(q[i]) for i in range(NUMCOUNTRIES-1)]
 
@@ -478,32 +395,25 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
                 if random.random() <= epsilon:
                     actions[action] = int(random.random())
 
-            # print ("____agent_actions", time.time() - st)
 
             # apply action, get rewards and new state
-            # st = time.time()
             reward = env.act(actions)
-            # print ("____act", time.time() - st)
 
             # store experience
 
-            # st = time.time()
             for country in range(NUMCOUNTRIES - 1):
                 exp_replay.remember([starting_observations[country], actions[country], \
                 reward, env.countries[-1].get_inputs(country)])
-            # print ("____remember", time.time() - st)
 
 
-        # st = time.time()
 
             # get data updated based on the stored experiences
         inputs, targets = exp_replay.get_batch(model, batch_size=batch_size)
 
         # train model on the updated data
-        loss += model.train_on_batch(inputs, targets) #JENN why isn't memory being cleared after every train_model?
+        loss += model.train_on_batch(inputs, targets)
         progress.append(loss)
 
-        # print ("____training", time.time() - st)
 
 
         # Print update from this episode
@@ -511,4 +421,4 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
 
     return progress
 model, agent_model, env, exp_replay = build_model()
-progress = train_model(model, agent_model, env, exp_replay, num_episodes=1000)
+progress = train_model(model, agent_model, env, exp_replay, num_episodes=999)

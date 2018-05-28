@@ -82,7 +82,7 @@ class Country():
 
     def resolve_policies(self):
         """Determines which diads agree to FTAs"""
-        for country in self.countries[:-1]:
+        for country in self.countries:
             if country.new_tariffs[self][1]:
                 if self.new_tariffs[country][1]:
                     self.tariffs[country] = [0, True]
@@ -153,7 +153,7 @@ class Agent(Country):
             policies = [1 for i in range(p-1)] #first time around, all other countries always want FTAs so that the
                                                #model's choices actually change the outcome
         else:
-            policies = self.model.predict(np.array([self.get_inputs(country) for country in range(1, p - 1)]))
+            policies = self.model.predict(np.array([self.get_inputs(country) for country in range(p - 1)]))
             policies = [np.argmax(policies[i]) for i in range(p-1)]
 
         self.new_tariffs = {self.countries[country]:[TARIFF, policies[country]] for country in range(p-1)}

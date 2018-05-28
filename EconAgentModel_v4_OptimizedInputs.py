@@ -24,7 +24,7 @@ TARIFF = 0.1
 epsilon = .05  # probability of exploration (choosing a random action instead of the current best one)
 state_space = NUMCOUNTRIES ** 2 + 3 * NUMCOUNTRIES
 action_space = 2
-max_memory = 500
+max_memory = 30000
 hidden_size = int(action_space + (state_space - action_space)/ 2)
 batch_size = 100
 debug_data = []
@@ -57,7 +57,7 @@ class Country():
         #global_inputs and countries have to be reordered so that the country setting tariffs is last.
         #This is only actually necessary for agent objects, since the actor object's format is what's being immitated
         self.global_inputs = global_inputs[:self.index * 3] + global_inputs[(self.index + 1) * 3:] + \
-        global_inputs[self.index * 3: (self.index + 1) * 3]
+            global_inputs[self.index * 3: (self.index + 1) * 3]
         self.countries = countries[:self.index] + countries[self.index + 1:] + [self]
         for country in self.countries[:-1]:
             self.new_tariffs[country] = [TARIFF, round(random.random())]
@@ -68,9 +68,9 @@ class Country():
         info that tariffs are being set on is always first"""
         p = NUMCOUNTRIES
         state = np.concatenate((self.state[p**2+p * country: p**2+p * (country+1)], self.state[p**2:p**2+p * country], \
-        self.state[p**2 + p * (country + 1):]))
+            self.state[p**2 + p * (country + 1):]))
         inputs = self.global_inputs[3 * country: 3 * (country + 1)] + self.global_inputs[:3 * country] + \
-        self.global_inputs[3 * (country + 1):]
+            self.global_inputs[3 * (country + 1):]
         return np.concatenate((inputs, state))
 
     def evaluatePolicy(self, ws):
@@ -112,18 +112,18 @@ class Actor(Country):
         producer_surplus = sales - self.production_cost * sum(productions[self.countries.index(self) * p:\
         (self.countries.index(self) + 1) * p])**2 / 2
         consumer_surplus = (self.population / self.demand_slope - prices[self.countries.index(self)]) * \
-        consumptions[self.countries.index(self)] / 2
+            consumptions[self.countries.index(self)] / 2
         max_consumption_surplus = self.population**2 / (2 * self.demand_slope)
 
         y = np.array([ (self.countries[country].tariffs[self][0] - 1) * \
-        self.countries[country].population / self.countries[country].demand_slope + \
-        self.production_base for country in range(p)])
+            self.countries[country].population / self.countries[country].demand_slope + \
+            self.production_base for country in range(p)])
         X = np.zeros((p,p))
         for market in range(p):
             for production in range(p):
                 if production == market:
-                    X[market, production] = -2 * (1 - self.countries[production].tariffs[self][0]) \
-                    / self.countries[production].demand_slope  - self.production_cost
+                    X[market, production] = -2 * (1 - self.countries[production].tariffs[self][0]) / \
+                        self.countries[production].demand_slope  - self.production_cost
                 else:
                     X[market, production] = -1 * self.production_cost
         mx_prd = np.linalg.solve(X,y)
@@ -249,8 +249,8 @@ class World():
         #
 
         y = np.array([ (self.countries[country%p].tariffs[self.countries[int(country/p)]][0] - 1) * \
-        self.countries[country%p].population / self.countries[country%p].demand_slope + \
-        self.countries[int(country/p)].production_base for country in range(p**2)])
+            self.countries[country%p].population / self.countries[country%p].demand_slope + \
+            self.countries[int(country/p)].production_base for country in range(p**2)])
         X = np.zeros((p**2, p**2))
         for producer in range(p):
             for market in range(p):
@@ -280,7 +280,8 @@ class World():
 
     def _update_state(self, actions):
         self._evaluatePolicy()
-        self.countries[-1].new_tariffs = {self.countries[-1].countries[i]:[TARIFF, actions[i]] for i in range(len(actions))}
+        self.countries[-1].new_tariffs = \
+            {self.countries[-1].countries[i]:[TARIFF, actions[i]] for i in range(len(actions))}
         self.countries[-1].new_tariffs[self.countries[-1]] = [0, False]
         for country in self.countries[:-1]:
             country.set_policies(self.state)
@@ -289,8 +290,7 @@ class World():
 
     def act(self, actions):
         self._update_state(actions)
-        reward = self.countries[-1].get_reward()
-        return reward
+        return self.countries[-1].get_reward()
 
 
 class ExperienceReplay(object):
@@ -342,13 +342,13 @@ def build_model():
     '''
 
     model = Sequential()
-    model.add(Dense(state_space, input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
+    model.add(Dense(state_space, input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001)))
     model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
     model.add(Dense(action_space, kernel_regularizer=l2(0.0001)))
     model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
 
     agent_model = Sequential()
-    agent_model.add(Dense(state_space, input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001))) #@jen is that comma supposed to be there?
+    agent_model.add(Dense(state_space, input_shape=(state_space,), activation='relu',kernel_regularizer=l2(0.0001)))
     agent_model.add(Dense(hidden_size, activation='relu', kernel_regularizer=l2(0.0001)))
     agent_model.add(Dense(action_space, kernel_regularizer=l2(0.0001)))
     agent_model.compile(sgd(lr=.04, clipvalue = 3.0), "mse")
@@ -401,7 +401,7 @@ def train_model(model, agent_model, env, exp_replay, num_episodes, update_env = 
 
             for country in range(NUMCOUNTRIES - 1):
                 exp_replay.remember([starting_observations[country], actions[country], \
-                reward, env.countries[-1].get_inputs(country)])
+                    reward, env.countries[-1].get_inputs(country)])
 
 
 

@@ -15,7 +15,7 @@ from keras.regularizers import l2
 # import IPython.display
 
 # parameters
-NUMCOUNTRIES = 50
+NUMCOUNTRIES = 20
 AVGPOP = 10000
 AVGPRODCOST = 0.001
 AVGPRODBASE = 50
@@ -82,10 +82,12 @@ class Country():
 
     def resolve_policies(self):
         """Determines which diads agree to FTAs"""
-        for country in self.countries:
+        for country in self.countries[:-1]:
             if country.new_tariffs[self][1]:
                 if self.new_tariffs[country][1]:
                     self.tariffs[country] = [0, True]
+                else:
+                    self.tariffs[country] = [TARIFF, False]
             else:
                 self.tariffs[country] = [TARIFF, False]
 
@@ -96,8 +98,6 @@ class Actor(Country):
         """Reward is calculated as the average of observed producer surplus divided by producer surplus if the country's
         firm was a global monopoly and observed consumer surplus divded by the entire area under the demand curve"""
 
-
-        debug_data = []
 
         p = NUMCOUNTRIES
         productions = self.state[:p**2]
@@ -110,7 +110,7 @@ class Actor(Country):
             sales += productions[market] * (prices[market%p] - self.countries[market%p].tariffs[self][0])
 
         producer_surplus = sales - self.production_cost * sum(productions[self.countries.index(self) * p:\
-        (self.countries.index(self) + 1) * p])**2 / 2
+            (self.countries.index(self) + 1) * p])**2 / 2
         consumer_surplus = (self.population / self.demand_slope - prices[self.countries.index(self)]) * \
             consumptions[self.countries.index(self)] / 2
         max_consumption_surplus = self.population**2 / (2 * self.demand_slope)
@@ -134,7 +134,7 @@ class Actor(Country):
         max_prod_surplus = sum([mx_prd[i] * mx_prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
         max_prod_surplus -= self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd)
 
-
+        return consumer_surplus / max_consumption_surplus
         return producer_surplus / max_prod_surplus + consumer_surplus / max_consumption_surplus
 
 class Agent(Country):
@@ -148,10 +148,9 @@ class Agent(Country):
     def set_policies(self, world_state):
         p = NUMCOUNTRIES
         self.evaluatePolicy(world_state)
-        st = time.time()
         if self.model == None:
             policies = [1 for i in range(p-1)] #first time around, all other countries always want FTAs so that the
-                                               #model's choices actually change the outcome
+            # policies[-1] = 1                   #model's choices actually change the outcome
         else:
             policies = self.model.predict(np.array([self.get_inputs(country) for country in range(p - 1)]))
             policies = [np.argmax(policies[i]) for i in range(p-1)]
@@ -160,9 +159,9 @@ class Agent(Country):
         self.new_tariffs[self] = [0, False]
 
 
-
     def update_model(model):
         self.model = model
+
 
 class World():
 
@@ -176,10 +175,13 @@ class World():
         for country in range(len(self.countries)):
             FTAs = sum([i[1] for i in self.countries[country].tariffs.values()])
             plt.bar(country, FTAs)
-        plt.show(block = False)
+        # plt.show(block = False)
+        plt.show()
 
     def reset(self, starting_model):
+        global debug_data
         self.countries = [Agent(starting_model) for country in range(NUMCOUNTRIES - 1)] + [Actor()]
+        debug_data = self.countries[-1]
         self.inputs_to_NN = []
         for country in self.countries:
             self.inputs_to_NN += [country.population, country.production_cost, country.production_base]
@@ -290,6 +292,7 @@ class World():
 
     def act(self, actions):
         self._update_state(actions)
+        # self.display()
         return self.countries[-1].get_reward()
 
 

@@ -133,8 +133,6 @@ class Actor(Country):
         mx_prices = [(self.countries[i].population - mx_prd[i]) / self.countries[i].demand_slope for i in range(p)]
         max_prod_surplus = sum([mx_prd[i] * mx_prices[i] * (1 - self.countries[i].tariffs[self][0]) for i in range(p)])
         max_prod_surplus -= self.production_cost * sum(mx_prd)**2 / 2 + self.production_base * sum(mx_prd)
-
-        return consumer_surplus / max_consumption_surplus
         return producer_surplus / max_prod_surplus + consumer_surplus / max_consumption_surplus
 
 class Agent(Country):
